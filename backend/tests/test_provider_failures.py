@@ -1,5 +1,6 @@
 """Provider control flow, without sending credentials or spending API allowance."""
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -89,6 +90,25 @@ async def test_read_timeout_is_unknown_usage_and_not_automatically_replayed(monk
     assert reserve.call_count == 1
     assert finish.call_args.args[1] is None
     assert finish.call_args.args[3:] == ("failed", "ReadTimeout")
+
+
+@pytest.mark.asyncio
+async def test_total_deadline_stops_dribbling_requests_and_queued_calls(monkeypatch):
+    async def slow_response(request):
+        # Mock transport doesn't implement socket read timeouts; only the outer
+        # deadline can bound this response, as with bytes arriving indefinitely.
+        await asyncio.sleep(10)
+        return httpx.Response(200, json={})
+
+    client, reserve, finish = provider(monkeypatch, slow_response)
+    client.settings.api_timeout_seconds = 0.01
+    for _ in range(2):
+        with pytest.raises(cloudflare.ProviderError) as error:
+            await client.complete(None, "test", "model", [])
+        assert error.value.code == "TimeoutError"
+    assert reserve.call_count == 1
+    assert finish.call_args.args[1] is None
+    assert finish.call_args.args[3:] == ("failed", "TimeoutError")
 
 
 @pytest.mark.asyncio

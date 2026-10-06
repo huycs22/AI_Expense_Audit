@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-REPORT_VERSION = "v8-policy-grounded-name-comparisons"
+REPORT_VERSION = "v10-focused-cross-review"
 
 
 class Finding(BaseModel):

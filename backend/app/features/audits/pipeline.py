@@ -8,8 +8,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal, utcnow
 from app.features.audits.consolidation import consolidate_findings
 from app.features.audits.models import Audit, AuditFinding, StageRun
-from app.features.audits.qualitative import restore_identity_references, review_identity_coverage
-from app.features.audits.reviewer import POLICY, phase_prompt, review, review_prompt
+from app.features.audits.reviewer import POLICY, review, review_prompt
 from app.features.audits.schemas import REPORT_VERSION
 from app.features.audits.verification import revalidate_review
 from app.features.documents.models import Document, DocumentPage
@@ -309,26 +308,6 @@ async def run_audit(audit_id: str, client: CloudflareClient):
             report["cross"] = cross
             report["findings"].extend(cross["findings"])
             report["unresolved_checks"].extend(cross["unresolved_checks"])
-            identity = await run_stage(
-                audit_id,
-                None,
-                "identity_coverage",
-                phase_prompt("identity_coverage"),
-                lambda: review_identity_coverage(
-                    client, audit_id, observations, context["documents"], cross
-                ),
-                input_data={
-                    "observations": observations,
-                    "documents": context["documents"],
-                    "cross": cross,
-                },
-            )
-            identity = restore_identity_references(identity, observations)
-            identity = revalidate_review(identity, observations, POLICY, "cross")
-            report["identity_coverage"] = identity
-            report["cross"]["findings"] = cross["findings"] + identity["findings"]
-            report["findings"].extend(identity["findings"])
-            report["unresolved_checks"].extend(identity["unresolved_checks"])
             roles = {d["role"]: d["id"] for d in successful}
             linked = {
                 frozenset((link["from_document"], link["to_document"]))
@@ -370,6 +349,7 @@ async def run_audit(audit_id: str, client: CloudflareClient):
 
 
 def save_report(audit_id: str, report: dict, status: str, error: str | None = None):
+    report["unresolved_checks"] = list(dict.fromkeys(report["unresolved_checks"]))
     with SessionLocal() as db:
         observations = [
             observation

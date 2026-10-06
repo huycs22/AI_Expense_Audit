@@ -61,8 +61,10 @@ async def test_semantic_correction_is_bounded_and_preserves_source_identity(corr
             # The semantic interface has short aliases, original quotes, and no
             # arithmetic-validity label that could bias independent adjudication.
             evidence = json.loads(messages[1]["content"])
-            assert evidence["observations"][0]["id"] == "o1"
-            assert evidence["observations"][0]["quote"] == "91"
+            selected = next(o for o in evidence["observations"] if o["id"] == refs[0])
+            quote_id = selected["quote_id"]
+            assert evidence["source_quotes"][quote_id] == ("17" if corrected else "91")
+            assert "semantic_refinement_feedback" not in evidence["context"]
             assert "verification" not in evidence["proposed_findings"][0]
             accepted = corrected and correction_succeeds
             payload = {

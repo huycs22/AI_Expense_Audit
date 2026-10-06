@@ -11,7 +11,7 @@ flowchart TD
   UI[React upload / results / history / usage] --> API[FastAPI feature routes]
   API --> Intake[documents: decode, validate, preserve originals]
   Intake --> Pages[Page evidence: native text, coordinates, previews]
-  Pages --> Extraction[extraction: GLM text / Gemma visual]
+  Pages --> Extraction[extraction: Gemma text / visual]
   Extraction --> Ground[Ground quotes and normalize values]
   Ground --> Quality[Independent source review: meaning and omissions]
   Quality --> Coverage[Re-ground corrections and enforce source coverage]
@@ -42,7 +42,7 @@ Backend features own their behavior and persistence: `documents` handles files/p
 |---|---|---|---|
 | Upload | Automatic multipart groups `document_1`–`document_3`; optional manual role groups | React page ordering; FastAPI; decoded PDF/Pillow inspection; 20 MB/file, 60 MB/set, 10 pages/document | Audit ID; generated document/file IDs; preserved originals; SHA-256; page order; queued job |
 | Read | Stored PDFs/images | pdfplumber text lines, coordinates and table candidates; PDFium rendering; Pillow EXIF orientation and image decoding | Every page's stable ID, blocks, measured coordinates, image preview, text quality/routing indicator |
-| Extract and classify | Page-labelled native text and/or ordered images | GLM-4.7-Flash for native text; Gemma 4 for scanned/image or mixed inputs; JSON schema output; one repair | Actual document type, mixed-document flag, page-local observations, row groups, quotations, uncertainties and complete page coverage |
+| Extract and classify | Page-labelled native text and/or ordered images | Gemma 4 for native text and scanned/image or mixed inputs; JSON schema output; one repair | Actual document type, mixed-document flag, page-local observations, row groups, quotations, uncertainties and complete page coverage |
 | Ground and normalize | Proposed observations plus original page evidence | Pydantic; verify supplied page/block IDs; match native quotations; preserve raw values; conservative date/Decimal normalization | Registered observation IDs; typed normalized values and units; original text; text-verified/visual-unverified/unreadable provenance |
 | Review extraction source | Original native blocks/images and initial observations | Same text/vision routing; independent AI semantic delta; one repair; Python source-preserving patches, re-grounding and block/identifier coverage checks | Versioned extraction v4; corrections/additions; source coverage dispositions; explicit uncertainties; extra API usage recorded |
 | Interpret source meaning | Original pages, without draft field labels | Configured reasoning/vision model; narrow actor/term fact contract; source grounding and physical-occurrence reconciliation | Extraction v5; source-supported role corrections and scalar terms; preserved item rows; change history; explicit ambiguity; persisted `source_semantics` stage |
@@ -86,7 +86,7 @@ The exact prompts are versioned beside their features; classification is include
 - `plan_internal.txt` and `plan_cross.txt`: declare source formulas; comparison operand order; percentage handling; no invented numeric literals.
 - `final_internal.txt` and `final_cross.txt`: use the executed ledger exactly; include calculation/evidence/policy IDs; perform non-numerical checks; disclose obstructed checks.
 
-GLM handles native-text extraction. Gemma handles visual extraction and both audit stages after GLM produced approval false positives and truncated a live review. Settings configure the four roles independently, restricted to the dated pricing allowlist. Both selected models are described as Free-access models in [Cloudflare's availability notice](https://developers.cloudflare.com/changelog/post/2026-07-28-models-require-workers-paid/). Actual model behavior, including bounded-output failures and visual transcription errors, is measured in EVALUATION.md.
+Gemma currently handles native-text extraction, visual extraction and both audit stages. GLM remains available as a configurable text-extraction alternative. This default is experimental: the latest live Gemma report still contains an unsupported temporal interpretation; it is not an accuracy certification. Settings configure the four roles independently, restricted to the dated pricing allowlist. Both selected models are described as Free-access models in [Cloudflare's availability notice](https://developers.cloudflare.com/changelog/post/2026-07-28-models-require-workers-paid/). Actual model behavior, including bounded-output failures and visual transcription errors, is measured in EVALUATION.md.
 
 ## Processing, retry and cost
 
@@ -144,3 +144,9 @@ Initial reading and its validation share a two-attempt limit. Truncation gets on
 Report v8 permits a name-difference finding only when explicit supplied policy requires equality; beneficiary/account-holder and supplier/company names are otherwise descriptive context. Account-number comparisons remain independent. Historical revision notes above retain their original scope and do not imply that name differences are current required anomalies.
 
 Native identifier coverage is per page: a known identifier needs a grounded occurrence on every page containing it. Multiple narrative mentions on the same page do not each require another identifier field. Raw repeated observations are not deleted, and different-page observations remain separately available for auditing. Source block coverage and citation grounding continue to enforce evidence integrity.
+
+## Performance consolidation
+
+The cross audit retains focused numerical and qualitative planning but shares one findings request and one independent meaning request. Normal total: 23 calls (nine extraction/source reviews, nine internal, five cross), before bounded repairs. Source quotes are deduplicated. Interpretation sees relevant physical records and terminal proof values; complete calculation graphs remain in persistence. Valid plans and relationships can be reused during a bounded conclusion correction; invalid business contracts still require replanning.
+
+Structural item grouping prevents a finding from bundling independent known item subjects, while genuine aggregate source formulas remain allowed. Qualitative pair definitions are supplied to the independent meaning reviewer; account evidence does not require a numerical formula. Source-independent adjudication excludes prior feedback/decisions. The final live result remains incomplete after a budget-blocked corrective review; EVALUATION.md distinguishes partial timings from end-to-end acceptance.

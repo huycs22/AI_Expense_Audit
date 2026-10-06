@@ -4,6 +4,7 @@ from pathlib import Path
 from app.core.cloudflare import CloudflareClient, ProviderError
 from app.core.config import get_settings
 from app.features.audits.calculator import Calculator
+from app.features.audits.comparisons import IdentityPlan, validate_identity_plan
 from app.features.audits.meaning import (
     CrossMeaningReview,
     MeaningReview,
@@ -26,12 +27,190 @@ FEATURE_DIR = Path(__file__).parent
 POLICY = json.loads((FEATURE_DIR / "policy.json").read_text(encoding="utf-8"))
 
 
+def compact_evidence(observations: list[dict]) -> dict:
+    """Send each quote once while preserving every observation's source identity."""
+    quotes = {
+        quote: f"q{i + 1}"
+        for i, quote in enumerate(
+            dict.fromkeys(o.get("quote") for o in observations if o.get("quote"))
+        )
+    }
+    fields = (
+        "id",
+        "document_id",
+        "page_id",
+        "field_key",
+        "value_type",
+        "normalized_value",
+        "unit",
+        "group_key",
+        "role",
+    )
+    compact = []
+    for observation in observations:
+        item = {key: observation[key] for key in fields if observation.get(key) is not None}
+        if observation.get("normalized_value") is None:
+            item["raw_value"] = observation.get("raw_value")
+        if observation.get("quote"):
+            item["quote_id"] = quotes[observation["quote"]]
+        compact.append(item)
+    return {
+        "observations": compact,
+        "source_quotes": {alias: quote for quote, alias in quotes.items()},
+    }
+
+
+def compact_ledger(results: list[dict]) -> list[dict]:
+    """Remove redundant expanded proofs; definitions and source registry remain supplied."""
+    keys = (
+        "id",
+        "request",
+        "value",
+        "unit",
+        "difference",
+        "passed",
+        "error",
+        "observation_ids",
+        "operands",
+        "result",
+        "matches",
+        "relation",
+        "comparison",
+    )
+    return [{key: result[key] for key in keys if key in result} for result in results]
+
+
+def review_ledger(calculator: Calculator) -> list[dict]:
+    """Terminal proofs carry executed operand values; full DAG stays persisted.
+
+    Interpretation gets formulas, source records and their evaluated outcomes,
+    without repeated intermediate graphs that invite wrong-result substitution.
+    """
+    results = []
+    for result in calculator.ledger.values():
+        request = result["request"]
+        if not request.get("check_id"):
+            continue
+        values = [calculator.resolve(ref, allow_identity=True)[0] for ref in request["operands"]]
+        results.append(
+            {
+                "id": result["id"],
+                "check_id": request["check_id"],
+                "relation": request["relation"],
+                "left_value": values[0],
+                "right_value": values[1],
+                "result": result["result"],
+                "unit": result["unit"],
+                "comparison": result["comparison"],
+                "observation_ids": result["observation_ids"],
+            }
+        )
+    return results
+
+
+def focused_evidence(observations: list[dict], refs: set[str]) -> dict:
+    """Retain complete records and repeated counterpart facts as counter-evidence."""
+    records = {
+        (o["document_id"], o["group_key"])
+        for o in observations
+        if o["id"] in refs and o.get("group_key") is not None
+    }
+    fields = {
+        (o["document_id"], o.get("field_key"), o.get("role"))
+        for o in observations
+        if o["id"] in refs and not o.get("field_key", "").startswith("item.")
+    }
+    item_codes = {
+        (o["document_id"], o.get("normalized_value"))
+        for o in observations
+        if o.get("field_key") == "item.code"
+        and (o.get("document_id"), o.get("group_key")) in records
+    }
+    financial_documents = {
+        o["document_id"] for o in observations if o["id"] in refs and o.get("value_type") == "money"
+    }
+    counterpart_refs = {
+        o["id"]
+        for o in observations
+        if (o.get("document_id"), o.get("field_key"), o.get("role")) in fields
+        or (
+            o.get("document_id") in financial_documents
+            and o.get("value_type") in {"money", "number"}
+            and not o.get("field_key", "").startswith("item.")
+        )
+        or (
+            o.get("field_key") == "item.code"
+            and (o.get("document_id"), o.get("normalized_value")) in item_codes
+        )
+    }
+    refs = refs | counterpart_refs
+    records.update(
+        (o["document_id"], o["group_key"])
+        for o in observations
+        if o["id"] in refs and o.get("group_key") is not None
+    )
+    return compact_evidence(
+        [
+            o
+            for o in observations
+            if o["id"] in refs or (o.get("document_id"), o.get("group_key")) in records
+        ]
+    )
+
+
+def validate_item_subjects(finding, calculator: Calculator) -> None:
+    """Independent item checks cannot be bundled into one claim.
+
+    Aggregate contracts remain intact; uncertain row identity stays with semantic
+    review rather than guessing a product catalog or matching by row position.
+    """
+    subjects = set()
+    for ref in finding.check_ids:
+        check = calculator.checks.get(ref)
+        if check is None:
+            return
+        sources = [
+            calculator.observations[source]
+            for source in expression_sources(check.left) | expression_sources(check.right)
+        ]
+        if any(not source.get("field_key", "").startswith("item.") for source in sources):
+            return
+        codes = set()
+        for source in sources:
+            matches = {
+                o.get("normalized_value")
+                for o in calculator.observations.values()
+                if o.get("field_key") == "item.code"
+                and o.get("document_id") == source.get("document_id")
+                and o.get("group_key") == source.get("group_key")
+                and source.get("group_key") is not None
+                and o.get("normalized_value")
+            }
+            if len(matches) != 1:
+                return
+            codes.update(matches)
+        if len(codes) != 1:
+            return
+        subjects.update(codes)
+    if len(subjects) > 1:
+        raise ValueError(
+            "Split independent item subjects into separate findings; "
+            "retain each item's check IDs and evidence. Subjects: " + repr(sorted(subjects))
+        )
+
+
 def review_prompt(scope: str) -> str:
     # Include both phase prompts in the stage fingerprint as well as the system context.
     names = [scope, f"plan_{scope}", f"final_{scope}", "meaning"]
     if scope == "cross":
         names.extend(["relationships", "meaning_cross"])
-    return "review-v10-immutable-valid-checks\n" + "\n".join(phase_prompt(name) for name in names)
+    if scope == "cross":
+        names.append("identity_coverage")
+    return (
+        "review-v13-focused-proofs-shared-review\n"
+        if scope == "cross"
+        else "review-v12-focused-independent-review\n"
+    ) + "\n".join(phase_prompt(name) for name in names)
 
 
 def phase_prompt(name: str) -> str:
@@ -247,19 +426,12 @@ async def review(
     for observation in aliased:
         observation["unit"] = inferred_unit(observation)
     calculator = Calculator(aliased, POLICY)
-    compact_observations = [
-        {
-            k: v
-            for k, v in o.items()
-            if k not in {"block_ids", "grounding"}
-            and not (k == "raw_value" and o.get("normalized_value") is not None)
-            and not (scope == "cross" and k == "quote")
-            and v is not None
-        }
-        for o in aliased
-    ]
+    evidence = compact_evidence(aliased)
+    compact_observations = evidence["observations"]
+    cache_keys = {"verified_check_plan", "verified_comparison_plan"}
+    cache_context = remap_references({k: v for k, v in context.items() if k in cache_keys}, aliases)
     compact_context = remap_references(
-        {k: v for k, v in context.items() if k != "source_pages"}, aliases
+        {k: v for k, v in context.items() if k != "source_pages" and k not in cache_keys}, aliases
     )
     if "internal_results" in compact_context:
         compact_context["internal_results"] = [
@@ -273,7 +445,12 @@ async def review(
             }
             for r in compact_context["internal_results"]
         ]
-    common = {"registered_observations": compact_observations, "policy": POLICY, **compact_context}
+    common = {
+        "registered_observations": compact_observations,
+        "source_quotes": evidence["source_quotes"],
+        "policy": POLICY,
+        **compact_context,
+    }
     common["grouped_item_view"] = grouped_item_view(compact_observations)
     if scope == "cross":
         common["same_field_comparison_candidates"] = comparison_candidates(compact_observations)
@@ -324,29 +501,32 @@ async def review(
             )
             return verify_links(empty, calculator.observations)
 
-        verified_links = await validated_json(
-            client,
-            audit_id,
-            stage("audit_relationships"),
-            [
-                {"role": "system", "content": phase_prompt("relationships")},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "documents": compact_context.get("documents", []),
-                            "identifiers": identifiers,
-                            "equal_identifier_candidates": pairs,
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            validate_relationships,
-            1000,
-            relationship_schema,
-            model,
-        )
+        if _refined and compact_context.get("verified_links") is not None:
+            verified_links = validate_relationships({"links": compact_context["verified_links"]})
+        else:
+            verified_links = await validated_json(
+                client,
+                audit_id,
+                stage("audit_relationships"),
+                [
+                    {"role": "system", "content": phase_prompt("relationships")},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "documents": compact_context.get("documents", []),
+                                "identifiers": identifiers,
+                                "equal_identifier_candidates": pairs,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                validate_relationships,
+                1000,
+                relationship_schema,
+                model,
+            )
         common["verified_links"] = verified_links
         roles = {d["role"]: d["id"] for d in compact_context.get("documents", [])}
         required_pairs = {
@@ -451,17 +631,78 @@ async def review(
                     )
         return plan
 
-    plan = await validated_json(
-        client,
-        audit_id,
-        stage(f"audit_plan_{scope}"),
-        [system, {"role": "user", "content": json.dumps(planner_payload, ensure_ascii=False)}],
-        validate_plan,
-        4500,
-        explicit_output_schema(CheckPlan.model_json_schema()),
-        model,
-    )
+    if _refined and cache_context.get("verified_check_plan") is not None:
+        plan = validate_plan(cache_context["verified_check_plan"])
+    else:
+        plan = await validated_json(
+            client,
+            audit_id,
+            stage(f"audit_plan_{scope}"),
+            [system, {"role": "user", "content": json.dumps(planner_payload, ensure_ascii=False)}],
+            validate_plan,
+            4500,
+            explicit_output_schema(CheckPlan.model_json_schema()),
+            model,
+        )
     results = execute_checks(plan.checks, calculator)
+    comparisons = []
+    if scope == "cross":
+        # Keep retrieval focused on identity evidence; share the expensive final
+        # interpretation and independent adjudication with the numerical pipeline.
+        eligible = [
+            o
+            for o in aliased
+            if o["value_type"] in {"text", "identifier"}
+            and o.get("raw_value")
+            and o.get("quote")
+            and not o["field_key"].startswith("item.")
+        ]
+        identity_evidence = compact_evidence(eligible)
+        roles = {doc["id"]: doc["role"] for doc in compact_context.get("documents", [])}
+        for source in identity_evidence["observations"]:
+            source["document_role"] = roles.get(source["document_id"])
+        if _refined and cache_context.get("verified_comparison_plan") is not None:
+            identity_plan = validate_identity_plan(
+                {
+                    "comparisons": cache_context["verified_comparison_plan"],
+                    "unresolved_checks": [],
+                },
+                eligible,
+                verified_links,
+            )
+        else:
+            identity_plan = (
+                await validated_json(
+                    client,
+                    audit_id,
+                    stage("audit_identity_plan"),
+                    [
+                        {"role": "system", "content": phase_prompt("identity_coverage")},
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    **identity_evidence,
+                                    "documents": compact_context.get("documents", []),
+                                    "verified_links": verified_links,
+                                    "policy": POLICY,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    ],
+                    lambda payload: validate_identity_plan(payload, eligible, verified_links),
+                    1800,
+                    explicit_output_schema(IdentityPlan.model_json_schema()),
+                    model,
+                )
+                if eligible
+                else IdentityPlan(comparisons=[], unresolved_checks=[])
+            )
+        comparisons = identity_plan.comparisons
+        plan.unresolved_checks = list(
+            dict.fromkeys(plan.unresolved_checks + identity_plan.unresolved_checks)
+        )
 
     validation_attempt = 0
 
@@ -471,6 +712,19 @@ async def review(
         if scope == "cross":
             payload = {**payload, "links": verified_links}
         result = AuditResult.model_validate(payload)
+        for finding in result.findings:
+            if finding.kind == "numerical":
+                validate_item_subjects(finding, calculator)
+        if scope == "cross":
+            planned_pairs = {frozenset(pair.observation_ids) for pair in comparisons}
+            for finding in result.findings:
+                if (
+                    finding.kind == "evidence"
+                    and frozenset(finding.observation_ids) not in planned_pairs
+                ):
+                    raise ValueError(
+                        "Evidence findings must cite exactly one planned qualitative pair"
+                    )
         verified = verify_result(result, calculator, scope)
         if verified["rejected_claims"] and validation_attempt == 1:
             raise ValueError(json.dumps(verified["rejected_claims"], ensure_ascii=False))
@@ -486,39 +740,50 @@ async def review(
         verified["unresolved_checks"] = list(
             dict.fromkeys(plan.unresolved_checks + verified["unresolved_checks"])
         )
+        verified["not_applicable_topics"] = list(
+            dict.fromkeys(plan.not_applicable_topics + verified["not_applicable_topics"])
+        )
         verified["calculation_plan"] = plan.model_dump()
         verified["calculation_errors"] = [item for item in results if "error" in item]
+        if scope == "cross":
+            verified["comparison_plan"] = [pair.model_dump() for pair in comparisons]
         return remap_references(verified, reverse_aliases)
 
+    final_common = common
+    if scope == "cross":
+        source_refs = {
+            ref
+            for check in plan.checks
+            for ref in expression_sources(check.left) | expression_sources(check.right)
+        }
+        source_refs.update(ref for pair in comparisons for ref in pair.observation_ids)
+        source_refs.update(ref for link in verified_links for ref in link["observation_ids"])
+        focused = focused_evidence(aliased, source_refs)
+        final_common = {
+            key: value
+            for key, value in common.items()
+            if key
+            not in {
+                "registered_observations",
+                "source_quotes",
+                "grouped_item_view",
+                "same_field_comparison_candidates",
+            }
+        }
+        final_common.update(
+            registered_observations=focused["observations"],
+            source_quotes=focused["source_quotes"],
+            grouped_item_view=grouped_item_view(focused["observations"]),
+        )
     final_payload = {
-        **common,
+        **final_common,
         "phase": "final_findings",
-        "calculation_results": results,
+        "calculation_results": review_ledger(calculator),
         "check_definitions": [check.model_dump() for check in plan.checks],
         "instructions": phase_prompt(f"final_{scope}"),
     }
-    # Put source meaning beside each computed result, so final reasoning need not
-    # reconstruct operand roles from a long list of short evidence aliases.
-    final_payload["calculation_results"] = [
-        {
-            **result,
-            "source_facts": [
-                {
-                    k: calculator.observations[ref].get(k)
-                    for k in (
-                        "id",
-                        "document_id",
-                        "field_key",
-                        "group_key",
-                        "normalized_value",
-                        "unit",
-                    )
-                }
-                for ref in result.get("observation_ids", [])
-            ],
-        }
-        for result in results
-    ]
+    if scope == "cross":
+        final_payload["comparison_plan"] = [pair.model_dump() for pair in comparisons]
     final_schema = AuditResult.model_json_schema()
     final_schema["$defs"]["Finding"]["properties"].pop("calculation_ids")
     if scope == "cross":
@@ -545,9 +810,17 @@ async def review(
     # rather than the planner's conversation or an arithmetic-validity assertion.
     semantic_input = remap_references(verified, aliases)
     meaning_type = CrossMeaningReview if scope == "cross" else MeaningReview
-    semantic_observations = [
-        {k: v for k, v in o.items() if k not in {"block_ids", "grounding"}} for o in aliased
-    ]
+    semantic_refs = {
+        ref
+        for check in plan.checks
+        for ref in expression_sources(check.left) | expression_sources(check.right)
+    }
+    semantic_refs.update(ref for pair in comparisons for ref in pair.observation_ids)
+    semantic_refs.update(
+        ref for finding in semantic_input["findings"] for ref in finding["observation_ids"]
+    )
+    semantic_refs.update(ref for link in verified_links for ref in link["observation_ids"])
+    semantic_evidence = focused_evidence(aliased, semantic_refs)
     adjudication = await validated_json(
         client,
         audit_id,
@@ -562,23 +835,41 @@ async def review(
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "observations": semantic_observations,
+                        **semantic_evidence,
                         "context": {
                             k: v
                             for k, v in compact_context.items()
-                            if k not in {"source_pages", "internal_results"}
+                            if k
+                            not in {
+                                "source_pages",
+                                "internal_results",
+                                "semantic_refinement_feedback",
+                            }
                         },
                         "policy": POLICY,
                         "verified_links": semantic_input.get("links", []),
                         "check_definitions": semantic_input.get("check_definitions", []),
-                        "calculation_results": semantic_input.get("calculations", []),
+                        "qualitative_comparisons": semantic_input.get("comparison_plan", []),
+                        "unresolved_checks": semantic_input.get("unresolved_checks", []),
+                        "not_applicable_topics": semantic_input.get("not_applicable_topics", []),
+                        "calculation_results": review_ledger(calculator),
                         "proposed_findings": [
                             {
                                 "id": str(i),
                                 **{
                                     k: v
                                     for k, v in finding.items()
-                                    if k not in {"verification", "verified_checks"}
+                                    if k
+                                    in {
+                                        "kind",
+                                        "title",
+                                        "explanation",
+                                        "severity",
+                                        "category",
+                                        "observation_ids",
+                                        "check_ids",
+                                        "policy_refs",
+                                    }
                                 },
                             }
                             for i, finding in enumerate(semantic_input["findings"])
@@ -623,12 +914,29 @@ async def review(
             "instructions": "Correct rejected hypotheses, evidence citations and explanations once. Python retains previously valid source formulas even if omitted from your delta; retain every supported anomaly, including failed comparisons. Remove inappropriate business comparisons; never suppress a real mismatch to make the report clean. Separate independent anomalies. Use only existing evidence; unavailable evidence stays unresolved.",
         }
         try:
+            reusable_context = {}
+            if all(decision.verdict == "valid" for decision in adjudication.checks) and not any(
+                getattr(decision, "explanation_completeness", "complete") == "incomplete"
+                for decision in adjudication.findings
+            ):
+                reusable_context["verified_check_plan"] = verified["calculation_plan"]
+            if all(
+                decision.verdict == "supported"
+                for decision in adjudication.findings
+                if verified["findings"][int(decision.id)]["kind"] == "evidence"
+            ):
+                reusable_context["verified_comparison_plan"] = verified.get("comparison_plan", [])
             corrected = await review(
                 client,
                 audit_id,
                 scope,
                 observations,
-                {**context, "semantic_refinement_feedback": feedback},
+                {
+                    **context,
+                    **reusable_context,
+                    "verified_links": verified.get("links", []),
+                    "semantic_refinement_feedback": feedback,
+                },
                 _refined=True,
             )
             corrected["semantic_refinement"] = {

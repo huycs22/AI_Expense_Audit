@@ -1,11 +1,17 @@
-"""Independent coverage of source identity comparisons omitted by numerical planning."""
+"""Legacy standalone identity runner for historical evaluations.
+
+Production now plans and adjudicates these pairs within the main cross review.
+"""
 
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from app.core.config import get_settings
 from app.features.audits.calculator import Calculator
+from app.features.audits.comparisons import (  # noqa: F401
+    IdentityComparison,
+    IdentityPlan,
+    validate_identity_plan,
+)
 from app.features.audits.meaning import CrossMeaningReview, apply_meaning, validate_meaning
 from app.features.audits.reviewer import (
     POLICY,
@@ -15,18 +21,6 @@ from app.features.audits.reviewer import (
 )
 from app.features.audits.schemas import AuditResult
 from app.features.audits.verification import verify_result
-
-
-class IdentityComparison(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    purpose: str = Field(min_length=1)
-    observation_ids: list[str] = Field(min_length=2, max_length=2)
-
-
-class IdentityPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    comparisons: list[IdentityComparison] = Field(max_length=24)
-    unresolved_checks: list[str]
 
 
 def restore_identity_references(payload, observations):
@@ -65,42 +59,6 @@ def identity_observations(observations):
     ]
 
 
-def validate_identity_plan(payload, observations, links):
-    plan = IdentityPlan.model_validate(payload)
-    registry = {o["id"]: o for o in observations}
-    graph = {}
-    for link in links:
-        if link["status"] == "supported":
-            a, b = link["from_document"], link["to_document"]
-            graph.setdefault(a, set()).add(b)
-            graph.setdefault(b, set()).add(a)
-    seen = set()
-    for comparison in plan.comparisons:
-        refs = comparison.observation_ids
-        if len(set(refs)) != 2 or not set(refs).issubset(registry):
-            raise ValueError("Identity comparison requires two distinct registered source values")
-        sources = [registry[ref] for ref in refs]
-        if any(
-            o["value_type"] not in {"text", "identifier"}
-            or not o.get("raw_value")
-            or not o.get("quote")
-            for o in sources
-        ):
-            raise ValueError("Identity comparisons require readable text/identifier evidence")
-        a, b = [o["document_id"] for o in sources]
-        reached, pending = set(), [a]
-        while pending:
-            current = pending.pop()
-            if current not in reached:
-                reached.add(current)
-                pending.extend(graph.get(current, set()) - reached)
-        if a == b or b not in reached:
-            raise ValueError("Identity comparisons require different, explicitly related documents")
-        key = frozenset(refs)
-        if key in seen:
-            raise ValueError("Repeated identity comparison")
-        seen.add(key)
-    return plan
 
 
 async def review_identity_coverage(client, audit_id, observations, documents, cross):

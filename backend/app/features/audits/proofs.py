@@ -6,9 +6,10 @@ same units, source set, or numerical result. This is a proof of the declared che
 it does not certify the model's business interpretation of arbitrary prose.
 """
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Operation = Literal["sum", "multiply", "subtract", "divide", "date_add_days"]
 
@@ -48,6 +49,18 @@ class CheckPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     checks: list[CheckDefinition] = Field(max_length=24)
     unresolved_checks: list[str] = Field(default_factory=list)
+    not_applicable_topics: list[str] = Field(default_factory=list)
+
+    @field_validator("unresolved_checks", "not_applicable_topics")
+    @classmethod
+    def explanatory_scope_notes(cls, notes):
+        if any(not note.strip() or not re.search(r"\s", note.strip()) for note in notes):
+            raise ValueError(
+                "Scope notes must explain the evidence/policy reason in readable language, "
+                "not a bare check ID. Optional hypotheses with no established obligation "
+                "belong in not_applicable_topics; genuinely blocked checks stay unresolved."
+            )
+        return notes
 
 
 def execute_checks(checks: list[CheckDefinition], calculator) -> list[dict]:

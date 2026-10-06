@@ -195,7 +195,7 @@ Features own routes, schemas, services, and persistence where applicable. Shared
 |---|---|---|---|
 | Intake | Three grouped documents | FastAPI, decoded type/size/page/order validation | Originals and audit/document IDs |
 | Read | PDF/image pages | pdfplumber text/coordinates, PDFium rendering, Pillow decoding | Stable page/block evidence and previews |
-| Extract | Native evidence/scanned images | GLM text extraction; Gemma visual extraction | Roles, observations, row groups, citations, uncertainties |
+| Extract | Native evidence/scanned images | Gemma text and visual extraction | Roles, observations, row groups, citations, uncertainties |
 | Normalize/review | Observations and originals | Pydantic, conservative dates/Decimal, AI source review | Grounded typed values and coverage results |
 | Source semantics | Originals without draft labels | Independent AI actor/term interpretation | Grounded additions/corrections, preserved item groups |
 | Internal audit | One document across all pages | LLM check planning, restricted calculator, findings/meaning review | Findings, formulas, assessed topics, unresolved checks |
@@ -227,7 +227,7 @@ See [.env.example](.env.example); Pydantic Settings reads the root `.env`.
 |---|---|---|
 | `CLOUDFLARE_ACCOUNT_ID` | Empty placeholder | Inference account |
 | `CLOUDFLARE_API_TOKEN` | Empty placeholder | Backend-only token |
-| `CLOUDFLARE_MODEL` | `@cf/zai-org/glm-4.7-flash` | Native-text extraction |
+| `CLOUDFLARE_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Native-text extraction |
 | `CLOUDFLARE_VISION_MODEL` | `@cf/google/gemma-4-26b-a4b-it` | Visual extraction |
 | `CLOUDFLARE_INTERNAL_MODEL` | Same Gemma model | Internal/source reasoning |
 | `CLOUDFLARE_CROSS_MODEL` | Same Gemma model | Cross reasoning |
@@ -274,6 +274,8 @@ Performance controls:
 - Bounded output/repairs and conservative reservations for failed/unknown-usage attempts.
 - Provider quota/access failures stop calls; no paid-model fallback or automatic billing upgrade.
 - History reopening and stage navigation use saved results without AI calls.
+
+The optimized normal workload is **23 calls**: nine extraction/source-review calls, nine internal-audit calls, and five cross calls (relationships, numerical planning, focused qualitative planning, shared findings, shared independent meaning review). Repairs remain additional and bounded. The former standalone identity findings/meaning calls are no longer run. Source quotes are sent once through a quote catalog rather than repeated per observation. This optimization remains under evaluation; the latest Gemma run completed but included an unsupported date finding and required extra repairs; unchanged accuracy and a substantial latency reduction are not yet verified. See EVALUATION.md for measurements.
 
 Independent source/meaning reviews add calls and latency. Timing separates elapsed audit time (including waits/retries) from summed API latency, which may overlap. Cached retries are not fresh end-to-end benchmarks.
 

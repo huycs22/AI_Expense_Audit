@@ -102,13 +102,14 @@ class CloudflareClient:
                 started = time.perf_counter()
                 try:
                     async with httpx.AsyncClient(timeout=settings.api_timeout_seconds) as client:
-                        response = await client.post(
-                            f"https://api.cloudflare.com/client/v4/accounts/{settings.cloudflare_account_id}/ai/v1/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {settings.cloudflare_api_token.get_secret_value()}"
-                            },
-                            json=payload,
-                        )
+                        async with asyncio.timeout(settings.api_timeout_seconds):
+                            response = await client.post(
+                                f"https://api.cloudflare.com/client/v4/accounts/{settings.cloudflare_account_id}/ai/v1/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {settings.cloudflare_api_token.get_secret_value()}"
+                                },
+                                json=payload,
+                            )
                     data = response.json()
                     if response.is_error or not data.get("choices"):
                         errors = data.get("errors", [])
@@ -171,7 +172,7 @@ class CloudflareClient:
                             partial_response=choice.get("message"),
                         )
                     return choice["message"]
-                except (httpx.HTTPError, ValueError) as exc:
+                except (httpx.HTTPError, ValueError, TimeoutError) as exc:
                     usage_service.finish(
                         call_id,
                         None,
@@ -179,7 +180,15 @@ class CloudflareClient:
                         "failed",
                         type(exc).__name__,
                     )
-                    if attempt == 2 or isinstance(exc, httpx.ReadTimeout):
+                    if isinstance(exc, (httpx.ReadTimeout, TimeoutError)):
+                        failure = ProviderError(
+                            "Cloudflare không phản hồi trong thời hạn cấu hình; giữ lại dữ liệu đã xử lý.",
+                            type(exc).__name__,
+                        )
+                        self.stopped_error = failure
+                        self.stop_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+                        raise failure from None
+                    if attempt == 2:
                         raise ProviderError(
                             "Lỗi kết nối/định dạng phản hồi Cloudflare", type(exc).__name__
                         ) from None

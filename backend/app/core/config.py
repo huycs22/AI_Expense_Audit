@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
     cloudflare_account_id: str = ""
     cloudflare_api_token: SecretStr = SecretStr("")
-    cloudflare_model: str = "@cf/zai-org/glm-4.7-flash"
+    cloudflare_model: str = "@cf/google/gemma-4-26b-a4b-it"
     cloudflare_internal_model: str = "@cf/google/gemma-4-26b-a4b-it"
     cloudflare_vision_model: str = "@cf/google/gemma-4-26b-a4b-it"
     cloudflare_cross_model: str = "@cf/google/gemma-4-26b-a4b-it"

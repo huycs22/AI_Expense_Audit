@@ -73,7 +73,7 @@ def main():
             "historical_revision": cross.id,
             "note": "Historical completed stages before the final prompt fixes. Current retry is quota-blocked.",
             "stage_latency_seconds": (cross.finished_at - beginning).total_seconds(),
-            "metrics": score(report, docs),
+            "metrics": score(report, docs, expected_name_match=True),
             "usage": summarize(calls),
             "revision_usage": summarize([call for call in calls if call.created_at >= beginning]),
             "report": report,

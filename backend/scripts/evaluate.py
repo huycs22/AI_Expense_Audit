@@ -69,7 +69,7 @@ EXPECTED_FIELDS = {
 }
 
 
-def score(report: dict, documents: list[Document]) -> dict:
+def score(report: dict, documents: list[Document], *, expected_name_match: bool = False) -> dict:
     observations = [o for d in documents for o in (d.extraction or {}).get("observations", [])]
     registry = {o["id"]: o for o in observations}
     critical = []
@@ -122,14 +122,6 @@ def score(report: dict, documents: list[Document]) -> dict:
         "total_variance": contains(["52250000", "55220000"], "cross"),
         "over_request": contains(["55220000", "57220000"]),
         "beneficiary_account": contains(["888800001042", "888800009917"], "cross"),
-        "beneficiary_name": any(
-            f["scope"] == "cross"
-            and any(
-                "NGUYỄN VĂN PHÚ" in (registry.get(ref, {}).get("raw_value") or "")
-                for ref in f["observation_ids"]
-            )
-            for f in findings
-        ),
         "pending_approval": any(
             any(
                 "pending" in (registry.get(ref, {}).get("raw_value") or "").casefold()
@@ -138,10 +130,22 @@ def score(report: dict, documents: list[Document]) -> dict:
             for f in findings
         ),
     }
+    name_difference_reported = any(
+        f["scope"] == "cross"
+        and any(
+            "NGUYỄN VĂN PHÚ" in (registry.get(ref, {}).get("raw_value") or "")
+            for ref in f["observation_ids"]
+        )
+        for f in findings
+    )
+    if expected_name_match:
+        checks["beneficiary_name"] = name_difference_reported
     # Precision requires adjudication of ALL findings, not just matching expected positives.
     return {
         "critical_fields": critical,
-        "metric_version": "field-and-item-group-v3-account-aliases",
+        "metric_version": "field-and-item-group-v4-explicit-policy-profile",
+        "policy_profile": "historical-name-match" if expected_name_match else "current-no-name-match",
+        "name_policy_consistent": name_difference_reported if expected_name_match else not name_difference_reported,
         "critical_field_accuracy": sum(c["found"] for c in critical) / len(critical),
         "recognized_expected_types": {d.role for d in documents} == set(EXPECTED_FIELDS),
         "expected_issue_checks": checks,
