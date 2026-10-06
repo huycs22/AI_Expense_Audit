@@ -4,8 +4,15 @@ A local application that reads a Purchase Order, Invoice, and Payment Request, c
 
 The UI and findings use Vietnamese; code and technical documentation use English. Included documents are synthetic assessment samples, not real transactions.
 
+## 🎬 Demo video
+
+**[▶ Watch the AI Expense Audit System demo on YouTube](https://youtu.be/cP8JIpGiAIw)**
+
+[![Watch the AI Expense Audit System demo](https://img.youtube.com/vi/cP8JIpGiAIw/hqdefault.jpg)](https://youtu.be/cP8JIpGiAIw)
+
 ## Contents
 
+- [Demo video](#-demo-video)
 - [Scope and business assumptions](#scope-and-business-assumptions)
 - [Quick start](#quick-start)
 - [Get Cloudflare credentials](#get-cloudflare-credentials)
