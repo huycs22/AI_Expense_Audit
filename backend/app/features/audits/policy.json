@@ -1,0 +1,6 @@
+{
+  "version": "demo-v1",
+  "amount_tolerance": {"value": "0", "description": "Demo comparison tolerance: exact stated amounts; no inferred rounding allowance."},
+  "approval_review": {"description": "Demo policy: an explicitly pending approval is a review concern, not proof of illegality or an asserted universal payment rule."},
+  "severity_guidance": {"description": "High: amount/quantity/account discrepancies affecting payment. Medium: uncertainties or pending approval. Low: minor contextual concerns."}
+}

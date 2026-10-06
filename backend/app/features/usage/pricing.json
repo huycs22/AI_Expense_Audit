@@ -1,0 +1,9 @@
+{
+  "version": "cloudflare-2026-10-05",
+  "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+  "usd_per_thousand_neurons": 0.011,
+  "models": {
+    "@cf/zai-org/glm-4.7-flash": {"input_neurons_per_million": 5500, "output_neurons_per_million": 36400},
+    "@cf/google/gemma-4-26b-a4b-it": {"input_neurons_per_million": 9091, "output_neurons_per_million": 27273}
+  }
+}
